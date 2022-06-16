@@ -5,28 +5,80 @@ Licensed under the MIT license. See LICENSE file in the project root for full li
 
 import cv2
 import numpy as np
-#import paho.mqtt.client as mqtt
+import os
+import sys
+import math
 import time
+import typing
+from dataclasses import dataclass
+from prometheus_client import start_http_server, Gauge, Histogram
 
-def avg_circles(circles, b):
+
+prometheus_gauge = Gauge('analog_gauge', 'Readout of an analog gauge', ['name', 'location', 'unit'])
+
+metrics_port = int(os.environ.get('METRICS_PORT', '8000'))
+output_dir = os.environ.get('OUTPUT_DIR', '/tmp')
+stream_url = os.environ['STREAM_URL']
+# sleep_seconds = float(os.environ.get('SLEEP_SECONDS', '5')) # float(os.environ['SLEEP_SECONDS'])
+
+
+Point = tuple[int,int]
+Vector = tuple[int,int]
+Line = tuple[int,int,int,int] # x1,y1,x2,y2
+Circle = tuple[int,int,int] # x,y,r
+
+def avg_circles(circles: list[Circle]) -> Circle:
     avg_x=0
     avg_y=0
     avg_r=0
-    for i in range(b):
+    for x,y,r in circles:
         #optional - average for multiple circles (can happen when a gauge is at a slight angle)
-        avg_x = avg_x + circles[0][i][0]
-        avg_y = avg_y + circles[0][i][1]
-        avg_r = avg_r + circles[0][i][2]
-    avg_x = int(avg_x/(b))
-    avg_y = int(avg_y/(b))
-    avg_r = int(avg_r/(b))
-    return avg_x, avg_y, avg_r
+        avg_x += x
+        avg_y += y
+        avg_r += r
+    avg_x = int(avg_x/len(circles))
+    avg_y = int(avg_y/len(circles))
+    avg_r = int(avg_r/len(circles))
+    return (avg_x, avg_y, avg_r)
 
 def dist_2_pts(x1, y1, x2, y2):
-    #print np.sqrt((x2-x1)^2+(y2-y1)^2)
     return np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
 
-def calibrate_gauge(gauge_number, file_type):
+def distance( p1: Point, p2: Point ) -> float:
+    x,y = pt_delta(p1, p2)
+    return np.sqrt(x**2 + y**2)
+
+
+def pt_delta( p1: Point, p2: Point ) -> Point:
+    return (p1[0] - p2[0], p1[1] - p2[1])
+
+def vector( origin: Point, destination: Point ) -> Vector:
+    return (destination[0] - origin[0], destination[1] - origin[1])
+
+def dist_line_2_point( p1: Point, p2: Point, p3: Point ) -> float:
+    return np.abs(np.cross(pt_delta(p2,p1),pt_delta(p1,p3))/np.linalg.norm(pt_delta(p2,p1)))
+
+def angle_between(v1: Vector, v2: Vector) -> float:
+    return np.rad2deg(np.arctan2(np.cross(v1,v2),np.dot(v1,v2))) + 180.0
+
+def find_circle(img: cv2.Mat) -> (Circle | None):
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    height, width = img.shape[:2]
+    circles: list[list[Circle]] = cv2.HoughCircles(img, cv2.HOUGH_GRADIENT, 1, 20, np.array([]), 100, 50, int(height*0.35), int(height*0.48))
+    # average found circles, found it to be more accurate than trying to tune HoughCircles parameters to get just the right one
+    if circles is None:
+        return None
+
+    # flatten
+    circles = [item for sublist in circles for item in sublist]
+
+    if len(circles) == 0:
+        return None
+
+    return avg_circles(circles)
+
+
+def calibrate_gauge( img: cv2.Mat, gauge_name: str):
     '''
         This function should be run using a test image in order to calibrate the range available to the dial as well as the
         units.  It works by first finding the center point and radius of the gauge.  Then it draws lines at hard coded intervals
@@ -37,24 +89,29 @@ def calibrate_gauge(gauge_number, file_type):
         It will return the min value with angle in degrees (as a tuple), the max value with angle in degrees (as a tuple),
         and the units (as a string).
     '''
-
-    img = cv2.imread('gauge-%s.%s' %(gauge_number, file_type))
-    height, width = img.shape[:2]
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)  #convert to gray
+    # height, width = img.shape[:2]
+    # gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)  #convert to gray
     #gray = cv2.GaussianBlur(gray, (5, 5), 0)
     # gray = cv2.medianBlur(gray, 5)
 
     #for testing, output gray image
-    #cv2.imwrite('gauge-%s-bw.%s' %(gauge_number, file_type),gray)
+    # cv2.imwrite('%s-bw%s' %(base_name, extension),gray)
 
     #detect circles
     #restricting the search from 35-48% of the possible radii gives fairly good results across different samples.  Remember that
     #these are pixel values which correspond to the possible radii search range.
-    circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, 1, 20, np.array([]), 100, 50, int(height*0.35), int(height*0.48))
+    # circles = cv2.HoughCircles(img, cv2.HOUGH_GRADIENT, 1, 20, np.array([]), 100, 50, int(height*0.35), int(height*0.48))
     # average found circles, found it to be more accurate than trying to tune HoughCircles parameters to get just the right one
-    a, b, c = circles.shape
-    x,y,r = avg_circles(circles, b)
+    # a, b, c = circles.shape
+    # x,y,r = avg_circles(circles, b)
+    circle = find_circle(img)
+    if circle is None:
+        print('Could not find circle', file=sys.stderr)
+        return
+    
+    x,y,r = circle
 
+    img = img.copy()
     #draw center and circle
     cv2.circle(img, (x, y), r, (0, 0, 255), 3, cv2.LINE_AA)  # draw circle
     cv2.circle(img, (x, y), 2, (0, 255, 0), 3, cv2.LINE_AA)  # draw center of circle
@@ -100,167 +157,228 @@ def calibrate_gauge(gauge_number, file_type):
         cv2.line(img, (int(p1[i][0]), int(p1[i][1])), (int(p2[i][0]), int(p2[i][1])),(0, 255, 0), 2)
         cv2.putText(img, '%s' %(int(i*separation)), (int(p_text[i][0]), int(p_text[i][1])), cv2.FONT_HERSHEY_SIMPLEX, 0.3,(0,0,0),1,cv2.LINE_AA)
 
-    cv2.imwrite('gauge-%s-calibration.%s' % (gauge_number, file_type), img)
+    cv2.imwrite(f'{output_dir}/{gauge_name}-calibration.jpg', img)
 
-    #get user input on min, max, values, and units
-    print 'gauge number: %s' %gauge_number
-    min_angle = raw_input('Min angle (lowest possible angle of dial) - in degrees: ') #the lowest possible angle
-    max_angle = raw_input('Max angle (highest possible angle) - in degrees: ') #highest possible angle
-    min_value = raw_input('Min value: ') #usually zero
-    max_value = raw_input('Max value: ') #maximum reading of the gauge
-    units = raw_input('Enter units: ')
+    return x, y, r
 
-    #for testing purposes: hardcode and comment out raw_inputs above
-    # min_angle = 45
-    # max_angle = 320
-    # min_value = 0
-    # max_value = 200
-    # units = "PSI"
+@dataclass
+class Range:
+    min: float
+    max: float
 
-    return min_angle, max_angle, min_value, max_value, units, x, y, r
+def get_current_value(img: cv2.Mat, angle_range: Range, value_range: Range, circle: Circle, gauge_name: str) -> (float | None):
 
-def get_current_value(img, min_angle, max_angle, min_value, max_value, x, y, r, gauge_number, file_type):
+    orig = img.copy()
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    #for testing purposes
-    #img = cv2.imread('gauge-%s.%s' % (gauge_number, file_type))
+    min_angle,max_angle = angle_range
+    min_value,max_value = value_range
 
-    gray2 = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    x,y,r = circle
+    center = (x,y)
 
-    # Set threshold and maxValue
-    thresh = 175
-    maxValue = 255
+    h, w = img.shape[:2]
 
-    # for testing purposes, found cv2.THRESH_BINARY_INV to perform the best
-    # th, dst1 = cv2.threshold(gray2, thresh, maxValue, cv2.THRESH_BINARY);
-    # th, dst2 = cv2.threshold(gray2, thresh, maxValue, cv2.THRESH_BINARY_INV);
-    # th, dst3 = cv2.threshold(gray2, thresh, maxValue, cv2.THRESH_TRUNC);
-    # th, dst4 = cv2.threshold(gray2, thresh, maxValue, cv2.THRESH_TOZERO);
-    # th, dst5 = cv2.threshold(gray2, thresh, maxValue, cv2.THRESH_TOZERO_INV);
-    # cv2.imwrite('gauge-%s-dst1.%s' % (gauge_number, file_type), dst1)
-    # cv2.imwrite('gauge-%s-dst2.%s' % (gauge_number, file_type), dst2)
-    # cv2.imwrite('gauge-%s-dst3.%s' % (gauge_number, file_type), dst3)
-    # cv2.imwrite('gauge-%s-dst4.%s' % (gauge_number, file_type), dst4)
-    # cv2.imwrite('gauge-%s-dst5.%s' % (gauge_number, file_type), dst5)
+    img = cv2.adaptiveThreshold(img, 128, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV,25,2);
+    cv2.circle(img, center, math.ceil(r * 0.1), 128, cv2.FILLED)
+    # cv2.imwrite(f'{output_dir}/{gauge_name}-01-threshold.jpg', img)
 
-    # apply thresholding which helps for finding lines
-    th, dst2 = cv2.threshold(gray2, thresh, maxValue, cv2.THRESH_BINARY_INV);
+    # build mask for floodfill based on gauge circle
+    floodfill_mask = np.zeros((h + 2, w + 2), np.uint8)
+    cv2.circle(floodfill_mask, (x+1,y+1), math.ceil(r * 0.8), 255,cv2.FILLED)
+
+    cv2.floodFill(img, cv2.bitwise_not(floodfill_mask), seedPoint=(x,y),newVal=255)
+    # cv2.imwrite(f'{output_dir}/{gauge_name}-02-floodFill.jpg', img)
+
+    _, img = cv2.threshold(img, 254, 255, cv2.THRESH_BINARY)
+    # cv2.imwrite(f'{output_dir}/{gauge_name}-03-threshold.jpg', img)
+    # edge_image = cv2.inRange(edge_image, np.ones((h,w), np.uint8) * 127, np.ones((h,w), np.uint8) * 128)
+    # bla = np.ones((h,w), np.uint8) * 128
+    # cv2.imwrite('bla.jpeg', bla)
+    # edge_image = cv2.b(bla, edge_image)
+    # edge_image = cv2.threshold(edge_image,128,)
 
     # found Hough Lines generally performs better without Canny / blurring, though there were a couple exceptions where it would only work with Canny / blurring
-    #dst2 = cv2.medianBlur(dst2, 5)
-    #dst2 = cv2.Canny(dst2, 50, 150)
-    #dst2 = cv2.GaussianBlur(dst2, (5, 5), 0)
+    # dst2 = cv2.medianBlur(gray2, 5)
+    # dst2 = cv2.Canny(gray2, 50, 150)
+    # dst2 = cv2.GaussianBlur(gray2, (5, 5), 0)
 
     # for testing, show image after thresholding
-    cv2.imwrite('gauge-%s-tempdst2.%s' % (gauge_number, file_type), dst2)
+    # cv2.imwrite(f'{gauge_name}-dial.jpg', img)
 
     # find lines
-    minLineLength = 10
-    maxLineGap = 0
-    lines = cv2.HoughLinesP(image=dst2, rho=3, theta=np.pi / 180, threshold=100,minLineLength=minLineLength, maxLineGap=0)  # rho is set to 3 to detect more lines, easier to get more then filter them out later
+    lines = cv2.HoughLinesP(image=img, rho=3, theta=np.pi / 180, threshold=100,minLineLength=math.ceil(r * 0.5), maxLineGap=math.ceil(r * 0.1))  # rho is set to 3 to detect more lines, easier to get more then filter them out later
+
+    if lines is None:
+        return None
+
+    # print( f'lines: {lines}' )
+    # flatten
+    lines = [item for sublist in lines for item in sublist]
 
     #for testing purposes, show all found lines
     # for i in range(0, len(lines)):
     #   for x1, y1, x2, y2 in lines[i]:
     #      cv2.line(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-    #      cv2.imwrite('gauge-%s-lines-test.%s' %(gauge_number, file_type), img)
+    # for lines in line_results:
+        # print( 'line: %s' %line )
 
-    # remove all lines outside a given radius
-    final_line_list = []
-    #print "radius: %s" %r
+    def augment_lines(line: Line) -> tuple[Line,float,float]:
+        zero_vector = [0,-1]
+        p1 = line[0:2]
+        p2 = line[2:4]
+        dist = dist_line_2_point(p1, p2, center)
+        dist_p1 = distance(center, p1)
+        dist_p2 = distance(center, p2)
+        p1,p2 = (p1,p2) if dist_p2 > dist_p1 else (p2,p1)
+        v = vector(p1,p2)
+        angle = angle_between(zero_vector,v)
 
-    diff1LowerBound = 0.15 #diff1LowerBound and diff1UpperBound determine how close the line should be from the center
-    diff1UpperBound = 0.25
-    diff2LowerBound = 0.5 #diff2LowerBound and diff2UpperBound determine how close the other point of the line should be to the outside of the gauge
-    diff2UpperBound = 1.0
-    for i in range(0, len(lines)):
-        for x1, y1, x2, y2 in lines[i]:
-            diff1 = dist_2_pts(x, y, x1, y1)  # x, y is center of circle
-            diff2 = dist_2_pts(x, y, x2, y2)  # x, y is center of circle
-            #set diff1 to be the smaller (closest to the center) of the two), makes the math easier
-            if (diff1 > diff2):
-                temp = diff1
-                diff1 = diff2
-                diff2 = temp
-            # check if line is within an acceptable range
-            if (((diff1<diff1UpperBound*r) and (diff1>diff1LowerBound*r) and (diff2<diff2UpperBound*r)) and (diff2>diff2LowerBound*r)):
-                line_length = dist_2_pts(x1, y1, x2, y2)
-                # add to final list
-                final_line_list.append([x1, y1, x2, y2])
+        return ((p1[0],p1[1],p2[0],p2[1]),dist,angle)
+        
+    lines = [augment_lines(line) for line in lines]
+    for line,_,_ in lines:
+        cv2.line(orig, line[0:2], line[2:4], (255, 0, 0), 2)
+    
+    # filter lines, that are to far from the center
+    lines = [(line,dist,angle) for line,dist,angle in lines if dist <= math.ceil(r * 0.25)]
+    # filter lines, that are out of the valid range
+    lines = [(line,dist,angle) for line,dist,angle in lines if angle >= min_angle and angle <= max_angle]
 
-    #testing only, show all lines after filtering
-    # for i in range(0,len(final_line_list)):
-    #     x1 = final_line_list[i][0]
-    #     y1 = final_line_list[i][1]
-    #     x2 = final_line_list[i][2]
-    #     y2 = final_line_list[i][3]
-    #     cv2.line(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+    if not lines:
+        return None
 
-    # assumes the first line is the best one
-    x1 = final_line_list[0][0]
-    y1 = final_line_list[0][1]
-    x2 = final_line_list[0][2]
-    y2 = final_line_list[0][3]
-    cv2.line(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+    # print( lines )
+    # lines = [(x1,y1,x2,y2) for x1,y1,x2,y2 in lines if dist_line_2_point((x1,y1),(x2,y2),(x,y)) <= math.ceil(r * 0.25)]
+    # for line,_,_ in lines:
+    #     cv2.line(orig, line[0:2], line[2:4], (0, 255, 0), 2)
 
-    #for testing purposes, show the line overlayed on the original image
-    #cv2.imwrite('gauge-1-test.jpg', img)
-    cv2.imwrite('gauge-%s-lines-2.%s' % (gauge_number, file_type), img)
+    # calculate median angle from valid lines
+    median_angle = np.median([ angle for _,_,angle in lines])
 
-    #find the farthest point from the center to be what is used to determine the angle
-    dist_pt_0 = dist_2_pts(x, y, x1, y1)
-    dist_pt_1 = dist_2_pts(x, y, x2, y2)
-    if (dist_pt_0 > dist_pt_1):
-        x_angle = x1 - x
-        y_angle = y - y1
-    else:
-        x_angle = x2 - x
-        y_angle = y - y2
-    # take the arc tan of y/x to find the angle
-    res = np.arctan(np.divide(float(y_angle), float(x_angle)))
-    #np.rad2deg(res) #coverts to degrees
+    angle_range = (max_angle - min_angle)
+    percent = (median_angle - min_angle) / angle_range
+    value_range = (max_value - min_value)
+    value = percent * value_range + min_value
 
-    # print x_angle
-    # print y_angle
-    # print res
-    # print np.rad2deg(res)
+    return value
 
-    #these were determined by trial and error
-    res = np.rad2deg(res)
-    if x_angle > 0 and y_angle > 0:  #in quadrant I
-        final_angle = 270 - res
-    if x_angle < 0 and y_angle > 0:  #in quadrant II
-        final_angle = 90 - res
-    if x_angle < 0 and y_angle < 0:  #in quadrant III
-        final_angle = 90 - res
-    if x_angle > 0 and y_angle < 0:  #in quadrant IV
-        final_angle = 270 - res
+def capture_stream( url: str ) -> (cv2.Mat | None):
+    cap = cv2.VideoCapture(url)
+    if not cap.isOpened():
+        print('Failed to open stream', file=sys.stderr)
+        return None
+    try:
+        ret,frame = cap.read()
+        if not ret:
+            print('Failed to read from stream', file=sys.stderr)
+            return None
+        return frame
+    finally:
+        cap.release()
 
-    #print final_angle
+Rect = tuple[int,int,int,int]
 
-    old_min = float(min_angle)
-    old_max = float(max_angle)
+Rotation = typing.Literal['ROTATE_90_CLOCKWISE', 'ROTATE_90_COUNTERCLOCKWISE', 'ROTATE_180'] | None
 
-    new_min = float(min_value)
-    new_max = float(max_value)
+@dataclass
+class GaugeOption:
+    name: str
+    rect: Rect
+    angles: Range
+    values: Range
+    location: str | None = None
+    unit: str | None = None
+    rotation: Rotation = None
 
-    old_value = final_angle
+def prepare_image(img: cv2.Mat, gauge: GaugeOption) -> cv2.Mat:
+    match gauge.rotation:
+        case 'ROTATE_90_CLOCKWISE':
+            img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+        case 'ROTATE_90_COUNTERCLOCKWISE':
+            img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        case 'ROTATE_180':
+            img = cv2.rotate(img, cv2.ROTATE_180)
 
-    old_range = (old_max - old_min)
-    new_range = (new_max - new_min)
-    new_value = (((old_value - old_min) * new_range) / old_range) + new_min
+    x,y,w,h = gauge.rect
+    return img[y:y+h,x:x+w]
 
-    return new_value
+
+def process(img: cv2.Mat, gauge: GaugeOption) -> (float | None):
+    img = prepare_image(img, gauge)
+    # cv2.imwrite(f'{output_dir}/{gauge.name}.jpg', img)
+    circle = find_circle(img)
+    if circle is None:
+        return None
+    return get_current_value(img, gauge.angles, gauge.values, circle, gauge.name)
+
+def serve( gauges: list[GaugeOption] ):
+    
+    start_http_server(metrics_port)
+    print( f'started server on port {metrics_port}' )
+    
+    while True:
+        capt = capture_stream(stream_url)
+
+        if capt is not None:
+            for g in gauges:
+                val = process(capt,g)
+                if val is None:
+                    print( f'skipping {g.name}' )
+                    continue
+
+                print( f'{g.name}: {round(val, 0):.0f}' )
+                prometheus_gauge.labels(
+                    name=g.name,
+                    location='' if g.location is None else g.location,
+                    unit='' if g.unit is None else g.unit ).set( val )
+
+        # time.sleep(sleep_seconds)
+
+def calibrate( gauges: list[GaugeOption] ):
+    capt = capture_stream(stream_url)
+    if capt is not None:
+        for gauge in gauges:
+            img = prepare_image(capt, gauge)
+            calibrate_gauge(img, gauge.name)
 
 def main():
-    gauge_number = 1
-    file_type='jpg'
-    # name the calibration image of your gauge 'gauge-#.jpg', for example 'gauge-5.jpg'.  It's written this way so you can easily try multiple images
-    min_angle, max_angle, min_value, max_value, units, x, y, r = calibrate_gauge(gauge_number, file_type)
+    if len(sys.argv) < 2:
+        print( "Commands: 'serve', 'calibrate' 'once'")
+        sys.exit(0)
 
-    #feed an image (or frame) to get the current value, based on the calibration, by default uses same image as calibration
-    img = cv2.imread('gauge-%s.%s' % (gauge_number, file_type))
-    val = get_current_value(img, min_angle, max_angle, min_value, max_value, x, y, r, gauge_number, file_type)
-    print "Current reading: %s %s" %(val, units)
+    if not stream_url:
+        print( "please specify a stream url via env STREAM_URL")
+        sys.exit(0)
+
+    gauges = [
+        GaugeOption(
+            'Vorlauf',
+            (814,128,518,503),
+            (50,317),
+            (0,120),
+            location='Bockholz 2',
+            unit='Celsius',
+            rotation='ROTATE_180' ),
+        GaugeOption(
+            'Ruecklauf',
+            (368,363,505,495),
+            (40,315),
+            (0,120),
+            location='Bockholz 2',
+            unit='Celsius',
+            rotation='ROTATE_180' ),
+    ]
+
+    command = sys.argv[1]
+    match command:
+        case 'serve':
+            serve(gauges)
+        case 'calibrate':
+            calibrate(gauges)
+        case _:
+            print( "Commands: 'serve', 'calibrate' 'once'")
+
 
 if __name__=='__main__':
     main()

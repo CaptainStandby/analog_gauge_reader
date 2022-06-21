@@ -8,10 +8,10 @@ import sys
 import math
 import time
 import typing
+from dataclasses import dataclass
 import cv2
 import numpy as np
-from dataclasses import dataclass
-from prometheus_client import start_http_server, Gauge, Histogram
+from prometheus_client import start_http_server, Gauge
 
 
 prometheus_gauge = Gauge('analog_gauge', 'Readout of an analog gauge', [

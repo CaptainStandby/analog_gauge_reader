@@ -1,0 +1,6 @@
+{
+	"python.linting.pylintEnabled": true,
+	"python.linting.pylintArgs": ["--generated-members=cv2.*"],
+	"python.languageServer": "Pylance",
+	"python.linting.enabled": true
+}

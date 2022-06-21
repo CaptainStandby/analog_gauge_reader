@@ -14,7 +14,8 @@ from dataclasses import dataclass
 from prometheus_client import start_http_server, Gauge, Histogram
 
 
-prometheus_gauge = Gauge('analog_gauge', 'Readout of an analog gauge', ['name', 'location', 'unit'])
+prometheus_gauge = Gauge('analog_gauge', 'Readout of an analog gauge', [
+                         'name', 'location', 'unit'])
 
 metrics_port = int(os.environ.get('METRICS_PORT', '8000'))
 output_dir = os.environ.get('OUTPUT_DIR', '/tmp')
@@ -22,17 +23,18 @@ stream_url = os.environ['STREAM_URL']
 # sleep_seconds = float(os.environ.get('SLEEP_SECONDS', '5')) # float(os.environ['SLEEP_SECONDS'])
 
 
-Point = tuple[int,int]
-Vector = tuple[int,int]
-Line = tuple[int,int,int,int] # x1,y1,x2,y2
-Circle = tuple[int,int,int] # x,y,r
+Point = tuple[int, int]
+Vector = tuple[int, int]
+Line = tuple[int, int, int, int]  # x1,y1,x2,y2
+Circle = tuple[int, int, int]  # x,y,r
+
 
 def avg_circles(circles: list[Circle]) -> Circle:
-    avg_x=0
-    avg_y=0
-    avg_r=0
-    for x,y,r in circles:
-        #optional - average for multiple circles (can happen when a gauge is at a slight angle)
+    avg_x = 0
+    avg_y = 0
+    avg_r = 0
+    for x, y, r in circles:
+        # optional - average for multiple circles (can happen when a gauge is at a slight angle)
         avg_x += x
         avg_y += y
         avg_r += r
@@ -41,30 +43,37 @@ def avg_circles(circles: list[Circle]) -> Circle:
     avg_r = int(avg_r/len(circles))
     return (avg_x, avg_y, avg_r)
 
+
 def dist_2_pts(x1, y1, x2, y2):
     return np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
 
-def distance( p1: Point, p2: Point ) -> float:
-    x,y = pt_delta(p1, p2)
+
+def distance(p1: Point, p2: Point) -> float:
+    x, y = pt_delta(p1, p2)
     return np.sqrt(x**2 + y**2)
 
 
-def pt_delta( p1: Point, p2: Point ) -> Point:
+def pt_delta(p1: Point, p2: Point) -> Point:
     return (p1[0] - p2[0], p1[1] - p2[1])
 
-def vector( origin: Point, destination: Point ) -> Vector:
+
+def vector(origin: Point, destination: Point) -> Vector:
     return (destination[0] - origin[0], destination[1] - origin[1])
 
-def dist_line_2_point( p1: Point, p2: Point, p3: Point ) -> float:
-    return np.abs(np.cross(pt_delta(p2,p1),pt_delta(p1,p3))/np.linalg.norm(pt_delta(p2,p1)))
+
+def dist_line_2_point(p1: Point, p2: Point, p3: Point) -> float:
+    return np.abs(np.cross(pt_delta(p2, p1), pt_delta(p1, p3))/np.linalg.norm(pt_delta(p2, p1)))
+
 
 def angle_between(v1: Vector, v2: Vector) -> float:
-    return np.rad2deg(np.arctan2(np.cross(v1,v2),np.dot(v1,v2))) + 180.0
+    return np.rad2deg(np.arctan2(np.cross(v1, v2), np.dot(v1, v2))) + 180.0
+
 
 def find_circle(img: cv2.Mat) -> (Circle | None):
     img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     height, width = img.shape[:2]
-    circles: list[list[Circle]] = cv2.HoughCircles(img, cv2.HOUGH_GRADIENT, 1, 20, np.array([]), 100, 50, int(height*0.35), int(height*0.48))
+    circles: list[list[Circle]] = cv2.HoughCircles(
+        img, cv2.HOUGH_GRADIENT, 1, 20, np.array([]), 100, 50, int(height*0.35), int(height*0.48))
     # average found circles, found it to be more accurate than trying to tune HoughCircles parameters to get just the right one
     if circles is None:
         return None
@@ -78,7 +87,7 @@ def find_circle(img: cv2.Mat) -> (Circle | None):
     return avg_circles(circles)
 
 
-def calibrate_gauge( img: cv2.Mat, gauge_name: str):
+def calibrate_gauge(img: cv2.Mat, gauge_name: str):
     '''
         This function should be run using a test image in order to calibrate the range available to the dial as well as the
         units.  It works by first finding the center point and radius of the gauge.  Then it draws lines at hard coded intervals
@@ -94,12 +103,12 @@ def calibrate_gauge( img: cv2.Mat, gauge_name: str):
     #gray = cv2.GaussianBlur(gray, (5, 5), 0)
     # gray = cv2.medianBlur(gray, 5)
 
-    #for testing, output gray image
+    # for testing, output gray image
     # cv2.imwrite('%s-bw%s' %(base_name, extension),gray)
 
-    #detect circles
-    #restricting the search from 35-48% of the possible radii gives fairly good results across different samples.  Remember that
-    #these are pixel values which correspond to the possible radii search range.
+    # detect circles
+    # restricting the search from 35-48% of the possible radii gives fairly good results across different samples.  Remember that
+    # these are pixel values which correspond to the possible radii search range.
     # circles = cv2.HoughCircles(img, cv2.HOUGH_GRADIENT, 1, 20, np.array([]), 100, 50, int(height*0.35), int(height*0.48))
     # average found circles, found it to be more accurate than trying to tune HoughCircles parameters to get just the right one
     # a, b, c = circles.shape
@@ -108,20 +117,20 @@ def calibrate_gauge( img: cv2.Mat, gauge_name: str):
     if circle is None:
         print('Could not find circle', file=sys.stderr)
         return
-    
-    x,y,r = circle
+
+    x, y, r = circle
 
     img = img.copy()
-    #draw center and circle
+    # draw center and circle
     cv2.circle(img, (x, y), r, (0, 0, 255), 3, cv2.LINE_AA)  # draw circle
-    cv2.circle(img, (x, y), 2, (0, 255, 0), 3, cv2.LINE_AA)  # draw center of circle
+    cv2.circle(img, (x, y), 2, (0, 255, 0), 3,
+               cv2.LINE_AA)  # draw center of circle
 
-    #for testing, output circles on image
+    # for testing, output circles on image
     #cv2.imwrite('gauge-%s-circles.%s' % (gauge_number, file_type), img)
 
-
-    #for calibration, plot lines from center going out at every 10 degrees and add marker
-    #for i from 0 to 36 (every 10 deg)
+    # for calibration, plot lines from center going out at every 10 degrees and add marker
+    # for i from 0 to 36 (every 10 deg)
 
     '''
     goes through the motion of a circle and sets x and y values based on the set separation spacing.  Also adds text to each
@@ -130,15 +139,16 @@ def calibrate_gauge( img: cv2.Mat, gauge_name: str):
     (i+9) in the text offset rotates the labels by 90 degrees so 0/360 is at the bottom (-y in cartesian).  So this assumes the
     gauge is aligned in the image, but it can be adjusted by changing the value of 9 to something else.
     '''
-    separation = 10.0 #in degrees
+    separation = 10.0  # in degrees
     interval = int(360 / separation)
-    p1 = np.zeros((interval,2))  #set empty arrays
-    p2 = np.zeros((interval,2))
-    p_text = np.zeros((interval,2))
-    for i in range(0,interval):
-        for j in range(0,2):
-            if (j%2==0):
-                p1[i][j] = x + 0.9 * r * np.cos(separation * i * 3.14 / 180) #point for lines
+    p1 = np.zeros((interval, 2))  # set empty arrays
+    p2 = np.zeros((interval, 2))
+    p_text = np.zeros((interval, 2))
+    for i in range(0, interval):
+        for j in range(0, 2):
+            if (j % 2 == 0):
+                p1[i][j] = x + 0.9 * r * \
+                    np.cos(separation * i * 3.14 / 180)  # point for lines
             else:
                 p1[i][j] = y + 0.9 * r * np.sin(separation * i * 3.14 / 180)
     text_offset_x = 10
@@ -147,47 +157,57 @@ def calibrate_gauge( img: cv2.Mat, gauge_name: str):
         for j in range(0, 2):
             if (j % 2 == 0):
                 p2[i][j] = x + r * np.cos(separation * i * 3.14 / 180)
-                p_text[i][j] = x - text_offset_x + 1.2 * r * np.cos((separation) * (i+9) * 3.14 / 180) #point for text labels, i+9 rotates the labels by 90 degrees
+                # point for text labels, i+9 rotates the labels by 90 degrees
+                p_text[i][j] = x - text_offset_x + 1.2 * r * \
+                    np.cos((separation) * (i+9) * 3.14 / 180)
             else:
                 p2[i][j] = y + r * np.sin(separation * i * 3.14 / 180)
-                p_text[i][j] = y + text_offset_y + 1.2* r * np.sin((separation) * (i+9) * 3.14 / 180)  # point for text labels, i+9 rotates the labels by 90 degrees
+                # point for text labels, i+9 rotates the labels by 90 degrees
+                p_text[i][j] = y + text_offset_y + 1.2 * r * \
+                    np.sin((separation) * (i+9) * 3.14 / 180)
 
-    #add the lines and labels to the image
-    for i in range(0,interval):
-        cv2.line(img, (int(p1[i][0]), int(p1[i][1])), (int(p2[i][0]), int(p2[i][1])),(0, 255, 0), 2)
-        cv2.putText(img, '%s' %(int(i*separation)), (int(p_text[i][0]), int(p_text[i][1])), cv2.FONT_HERSHEY_SIMPLEX, 0.3,(0,0,0),1,cv2.LINE_AA)
+    # add the lines and labels to the image
+    for i in range(0, interval):
+        cv2.line(img, (int(p1[i][0]), int(p1[i][1])),
+                 (int(p2[i][0]), int(p2[i][1])), (0, 255, 0), 2)
+        cv2.putText(img, '%s' % (int(i*separation)), (int(p_text[i][0]), int(
+            p_text[i][1])), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 0), 1, cv2.LINE_AA)
 
     cv2.imwrite(f'{output_dir}/{gauge_name}-calibration.jpg', img)
 
     return x, y, r
+
 
 @dataclass
 class Range:
     min: float
     max: float
 
+
 def get_current_value(img: cv2.Mat, angle_range: Range, value_range: Range, circle: Circle, gauge_name: str) -> (float | None):
 
     orig = img.copy()
     img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    min_angle,max_angle = angle_range
-    min_value,max_value = value_range
+    min_angle, max_angle = angle_range
+    min_value, max_value = value_range
 
-    x,y,r = circle
-    center = (x,y)
+    x, y, r = circle
+    center = (x, y)
 
     h, w = img.shape[:2]
 
-    img = cv2.adaptiveThreshold(img, 128, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV,25,2);
+    img = cv2.adaptiveThreshold(
+        img, 128, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 25, 2)
     cv2.circle(img, center, math.ceil(r * 0.1), 128, cv2.FILLED)
     # cv2.imwrite(f'{output_dir}/{gauge_name}-01-threshold.jpg', img)
 
     # build mask for floodfill based on gauge circle
     floodfill_mask = np.zeros((h + 2, w + 2), np.uint8)
-    cv2.circle(floodfill_mask, (x+1,y+1), math.ceil(r * 0.8), 255,cv2.FILLED)
+    cv2.circle(floodfill_mask, (x+1, y+1), math.ceil(r * 0.8), 255, cv2.FILLED)
 
-    cv2.floodFill(img, cv2.bitwise_not(floodfill_mask), seedPoint=(x,y),newVal=255)
+    cv2.floodFill(img, cv2.bitwise_not(floodfill_mask),
+                  seedPoint=(x, y), newVal=255)
     # cv2.imwrite(f'{output_dir}/{gauge_name}-02-floodFill.jpg', img)
 
     _, img = cv2.threshold(img, 254, 255, cv2.THRESH_BINARY)
@@ -207,7 +227,9 @@ def get_current_value(img: cv2.Mat, angle_range: Range, value_range: Range, circ
     # cv2.imwrite(f'{gauge_name}-dial.jpg', img)
 
     # find lines
-    lines = cv2.HoughLinesP(image=img, rho=3, theta=np.pi / 180, threshold=100,minLineLength=math.ceil(r * 0.5), maxLineGap=math.ceil(r * 0.1))  # rho is set to 3 to detect more lines, easier to get more then filter them out later
+    # rho is set to 3 to detect more lines, easier to get more then filter them out later
+    lines = cv2.HoughLinesP(image=img, rho=3, theta=np.pi / 180, threshold=100,
+                            minLineLength=math.ceil(r * 0.5), maxLineGap=math.ceil(r * 0.1))
 
     if lines is None:
         return None
@@ -216,34 +238,36 @@ def get_current_value(img: cv2.Mat, angle_range: Range, value_range: Range, circ
     # flatten
     lines = [item for sublist in lines for item in sublist]
 
-    #for testing purposes, show all found lines
+    # for testing purposes, show all found lines
     # for i in range(0, len(lines)):
     #   for x1, y1, x2, y2 in lines[i]:
     #      cv2.line(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
     # for lines in line_results:
-        # print( 'line: %s' %line )
+    # print( 'line: %s' %line )
 
-    def augment_lines(line: Line) -> tuple[Line,float,float]:
-        zero_vector = [0,-1]
+    def augment_lines(line: Line) -> tuple[Line, float, float]:
+        zero_vector = [0, -1]
         p1 = line[0:2]
         p2 = line[2:4]
         dist = dist_line_2_point(p1, p2, center)
         dist_p1 = distance(center, p1)
         dist_p2 = distance(center, p2)
-        p1,p2 = (p1,p2) if dist_p2 > dist_p1 else (p2,p1)
-        v = vector(p1,p2)
-        angle = angle_between(zero_vector,v)
+        p1, p2 = (p1, p2) if dist_p2 > dist_p1 else (p2, p1)
+        v = vector(p1, p2)
+        angle = angle_between(zero_vector, v)
 
-        return ((p1[0],p1[1],p2[0],p2[1]),dist,angle)
-        
+        return ((p1[0], p1[1], p2[0], p2[1]), dist, angle)
+
     lines = [augment_lines(line) for line in lines]
-    for line,_,_ in lines:
+    for line, _, _ in lines:
         cv2.line(orig, line[0:2], line[2:4], (255, 0, 0), 2)
-    
+
     # filter lines, that are to far from the center
-    lines = [(line,dist,angle) for line,dist,angle in lines if dist <= math.ceil(r * 0.25)]
+    lines = [(line, dist, angle)
+             for line, dist, angle in lines if dist <= math.ceil(r * 0.25)]
     # filter lines, that are out of the valid range
-    lines = [(line,dist,angle) for line,dist,angle in lines if angle >= min_angle and angle <= max_angle]
+    lines = [(line, dist, angle) for line, dist,
+             angle in lines if angle >= min_angle and angle <= max_angle]
 
     if not lines:
         return None
@@ -254,7 +278,7 @@ def get_current_value(img: cv2.Mat, angle_range: Range, value_range: Range, circ
     #     cv2.line(orig, line[0:2], line[2:4], (0, 255, 0), 2)
 
     # calculate median angle from valid lines
-    median_angle = np.median([ angle for _,_,angle in lines])
+    median_angle = np.median([angle for _, _, angle in lines])
 
     angle_range = (max_angle - min_angle)
     percent = (median_angle - min_angle) / angle_range
@@ -263,13 +287,14 @@ def get_current_value(img: cv2.Mat, angle_range: Range, value_range: Range, circ
 
     return value
 
-def capture_stream( url: str ) -> (cv2.Mat | None):
+
+def capture_stream(url: str) -> (cv2.Mat | None):
     cap = cv2.VideoCapture(url)
     if not cap.isOpened():
         print('Failed to open stream', file=sys.stderr)
         return None
     try:
-        ret,frame = cap.read()
+        ret, frame = cap.read()
         if not ret:
             print('Failed to read from stream', file=sys.stderr)
             return None
@@ -277,9 +302,12 @@ def capture_stream( url: str ) -> (cv2.Mat | None):
     finally:
         cap.release()
 
-Rect = tuple[int,int,int,int]
 
-Rotation = typing.Literal['ROTATE_90_CLOCKWISE', 'ROTATE_90_COUNTERCLOCKWISE', 'ROTATE_180'] | None
+Rect = tuple[int, int, int, int]
+
+Rotation = typing.Literal['ROTATE_90_CLOCKWISE',
+                          'ROTATE_90_COUNTERCLOCKWISE', 'ROTATE_180'] | None
+
 
 @dataclass
 class GaugeOption:
@@ -291,6 +319,7 @@ class GaugeOption:
     unit: str | None = None
     rotation: Rotation = None
 
+
 def prepare_image(img: cv2.Mat, gauge: GaugeOption) -> cv2.Mat:
     match gauge.rotation:
         case 'ROTATE_90_CLOCKWISE':
@@ -300,8 +329,8 @@ def prepare_image(img: cv2.Mat, gauge: GaugeOption) -> cv2.Mat:
         case 'ROTATE_180':
             img = cv2.rotate(img, cv2.ROTATE_180)
 
-    x,y,w,h = gauge.rect
-    return img[y:y+h,x:x+w]
+    x, y, w, h = gauge.rect
+    return img[y:y+h, x:x+w]
 
 
 def process(img: cv2.Mat, gauge: GaugeOption) -> (float | None):
@@ -312,62 +341,65 @@ def process(img: cv2.Mat, gauge: GaugeOption) -> (float | None):
         return None
     return get_current_value(img, gauge.angles, gauge.values, circle, gauge.name)
 
-def serve( gauges: list[GaugeOption] ):
-    
+
+def serve(gauges: list[GaugeOption]):
+
     start_http_server(metrics_port)
-    print( f'started server on port {metrics_port}' )
-    
+    print(f'started server on port {metrics_port}')
+
     while True:
         capt = capture_stream(stream_url)
 
         if capt is not None:
             for g in gauges:
-                val = process(capt,g)
+                val = process(capt, g)
                 if val is None:
-                    print( f'skipping {g.name}' )
+                    print(f'skipping {g.name}')
                     continue
 
-                print( f'{g.name}: {round(val, 0):.0f}' )
+                print(f'{g.name}: {round(val, 0):.0f}')
                 prometheus_gauge.labels(
                     name=g.name,
                     location='' if g.location is None else g.location,
-                    unit='' if g.unit is None else g.unit ).set( val )
+                    unit='' if g.unit is None else g.unit).set(val)
 
         # time.sleep(sleep_seconds)
 
-def calibrate( gauges: list[GaugeOption] ):
+
+def calibrate(gauges: list[GaugeOption]):
     capt = capture_stream(stream_url)
     if capt is not None:
         for gauge in gauges:
             img = prepare_image(capt, gauge)
             calibrate_gauge(img, gauge.name)
 
+
 def main():
     if len(sys.argv) < 2:
-        print( "Commands: 'serve', 'calibrate' 'once'")
+        print("Commands: 'serve', 'calibrate' 'once'")
         sys.exit(0)
 
     if not stream_url:
-        print( "please specify a stream url via env STREAM_URL")
+        print("please specify a stream url via env STREAM_URL")
         sys.exit(0)
 
     gauges = [
         GaugeOption(
             'Vorlauf',
-            (814,128,518,503),
-            (50,317),
-            (0,120),
+            (814, 128, 518, 503),
+            (50, 317),
+            (0, 120),
             location='Bockholz 2',
             unit='Celsius',
-            rotation='ROTATE_180' ),
+            rotation='ROTATE_180'),
         GaugeOption(
             'Ruecklauf',
-            (368,363,505,495),
-            (40,315),
-            (0,120),
+            (368, 363, 505, 495),
+            (40, 315),
+            (0, 120),
             location='Bockholz 2',
             unit='Celsius',
-            rotation='ROTATE_180' ),
+            rotation='ROTATE_180'),
     ]
 
     command = sys.argv[1]
@@ -377,9 +409,8 @@ def main():
         case 'calibrate':
             calibrate(gauges)
         case _:
-            print( "Commands: 'serve', 'calibrate' 'once'")
+            print("Commands: 'serve', 'calibrate' 'once'")
 
 
-if __name__=='__main__':
+if __name__ == '__main__':
     main()
-   	

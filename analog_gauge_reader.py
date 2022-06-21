@@ -20,7 +20,7 @@ prometheus_gauge = Gauge('analog_gauge', 'Readout of an analog gauge', [
 metrics_port = int(os.environ.get('METRICS_PORT', '8000'))
 output_dir = os.environ.get('OUTPUT_DIR', '/tmp')
 stream_url = os.environ['STREAM_URL']
-# sleep_seconds = float(os.environ.get('SLEEP_SECONDS', '5')) # float(os.environ['SLEEP_SECONDS'])
+interval_seconds = float(os.environ.get('INTERVAL_SECONDS', '10'))
 
 
 Point = tuple[int, int]
@@ -347,14 +347,18 @@ def serve(gauges: list[GaugeOption]):
     start_http_server(metrics_port)
     print(f'started server on port {metrics_port}')
 
+    last_time = 0.0
+
     while True:
+        print('taking picture')
         capt = capture_stream(stream_url)
 
         if capt is not None:
             for g in gauges:
+                print(f'reading gauge {g.name}')
                 val = process(capt, g)
                 if val is None:
-                    print(f'skipping {g.name}')
+                    print(f'could not read {g.name}')
                     continue
 
                 print(f'{g.name}: {round(val, 0):.0f}')
@@ -363,7 +367,11 @@ def serve(gauges: list[GaugeOption]):
                     location='' if g.location is None else g.location,
                     unit='' if g.unit is None else g.unit).set(val)
 
-        # time.sleep(sleep_seconds)
+        elapsed = time.monotonic() - last_time
+        if elapsed < interval_seconds:
+            print(f'sleep for {interval_seconds - elapsed}')
+            time.sleep(interval_seconds - elapsed)
+        last_time = time.monotonic()
 
 
 def calibrate(gauges: list[GaugeOption]):

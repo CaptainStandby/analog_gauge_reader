@@ -1,15 +1,15 @@
-'''  
+'''
 Copyright (c) 2017 Intel Corporation.
 Licensed under the MIT license. See LICENSE file in the project root for full license information.
 '''
 
-import cv2
-import numpy as np
 import os
 import sys
 import math
 import time
 import typing
+import cv2
+import numpy as np
 from dataclasses import dataclass
 from prometheus_client import start_http_server, Gauge, Histogram
 

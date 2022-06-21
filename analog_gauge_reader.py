@@ -3,30 +3,15 @@ Copyright (c) 2017 Intel Corporation.
 Licensed under the MIT license. See LICENSE file in the project root for full license information.
 '''
 
-import os
+import typing
 import sys
 import math
-import time
-import typing
-from dataclasses import dataclass
 import cv2
 import numpy as np
-from prometheus_client import start_http_server, Gauge
+from util_types import Circle, Point, Range, Line, Vector, GaugeOption
 
 
-prometheus_gauge = Gauge('analog_gauge', 'Readout of an analog gauge', [
-                         'name', 'location', 'unit'])
-
-metrics_port = int(os.environ.get('METRICS_PORT', '8000'))
-output_dir = os.environ.get('OUTPUT_DIR', '/tmp')
-stream_url = os.environ['STREAM_URL']
-interval_seconds = float(os.environ.get('INTERVAL_SECONDS', '10'))
-
-
-Point = tuple[int, int]
-Vector = tuple[int, int]
-Line = tuple[int, int, int, int]  # x1,y1,x2,y2
-Circle = tuple[int, int, int]  # x,y,r
+OutputImageFunc = typing.Callable[[cv2.Mat, str], None]
 
 
 def avg_circles(circles: list[Circle]) -> Circle:
@@ -87,7 +72,7 @@ def find_circle(img: cv2.Mat) -> (Circle | None):
     return avg_circles(circles)
 
 
-def calibrate_gauge(img: cv2.Mat, gauge_name: str):
+def calibrate_gauge(img: cv2.Mat, gauge_name: str, output_fun: OutputImageFunc):
     '''
         This function should be run using a test image in order to calibrate the range available to the dial as well as the
         units.  It works by first finding the center point and radius of the gauge.  Then it draws lines at hard coded intervals
@@ -173,15 +158,9 @@ def calibrate_gauge(img: cv2.Mat, gauge_name: str):
         cv2.putText(img, '%s' % (int(i*separation)), (int(p_text[i][0]), int(
             p_text[i][1])), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 0), 1, cv2.LINE_AA)
 
-    cv2.imwrite(f'{output_dir}/{gauge_name}-calibration.jpg', img)
+    output_fun(img,f'{gauge_name}-calibration')
 
     return x, y, r
-
-
-@dataclass
-class Range:
-    min: float
-    max: float
 
 
 def get_current_value(img: cv2.Mat, angle_range: Range, value_range: Range, circle: Circle, gauge_name: str) -> (float | None):
@@ -303,23 +282,6 @@ def capture_stream(url: str) -> (cv2.Mat | None):
         cap.release()
 
 
-Rect = tuple[int, int, int, int]
-
-Rotation = typing.Literal['ROTATE_90_CLOCKWISE',
-                          'ROTATE_90_COUNTERCLOCKWISE', 'ROTATE_180'] | None
-
-
-@dataclass
-class GaugeOption:
-    name: str
-    rect: Rect
-    angles: Range
-    values: Range
-    location: str | None = None
-    unit: str | None = None
-    rotation: Rotation = None
-
-
 def prepare_image(img: cv2.Mat, gauge: GaugeOption) -> cv2.Mat:
     match gauge.rotation:
         case 'ROTATE_90_CLOCKWISE':
@@ -340,85 +302,3 @@ def process(img: cv2.Mat, gauge: GaugeOption) -> (float | None):
     if circle is None:
         return None
     return get_current_value(img, gauge.angles, gauge.values, circle, gauge.name)
-
-
-def serve(gauges: list[GaugeOption]):
-
-    start_http_server(metrics_port)
-    print(f'started server on port {metrics_port}')
-
-    last_time = 0.0
-
-    while True:
-        print('taking picture')
-        capt = capture_stream(stream_url)
-
-        if capt is not None:
-            for g in gauges:
-                print(f'reading gauge {g.name}')
-                val = process(capt, g)
-                if val is None:
-                    print(f'could not read {g.name}')
-                    continue
-
-                print(f'{g.name}: {round(val, 0):.0f}')
-                prometheus_gauge.labels(
-                    name=g.name,
-                    location='' if g.location is None else g.location,
-                    unit='' if g.unit is None else g.unit).set(val)
-
-        elapsed = time.monotonic() - last_time
-        if elapsed < interval_seconds:
-            print(f'sleep for {interval_seconds - elapsed}')
-            time.sleep(interval_seconds - elapsed)
-        last_time = time.monotonic()
-
-
-def calibrate(gauges: list[GaugeOption]):
-    capt = capture_stream(stream_url)
-    if capt is not None:
-        for gauge in gauges:
-            img = prepare_image(capt, gauge)
-            calibrate_gauge(img, gauge.name)
-
-
-def main():
-    if len(sys.argv) < 2:
-        print("Commands: 'serve', 'calibrate' 'once'")
-        sys.exit(0)
-
-    if not stream_url:
-        print("please specify a stream url via env STREAM_URL")
-        sys.exit(0)
-
-    gauges = [
-        GaugeOption(
-            'Vorlauf',
-            (814, 128, 518, 503),
-            (50, 317),
-            (0, 120),
-            location='Bockholz 2',
-            unit='Celsius',
-            rotation='ROTATE_180'),
-        GaugeOption(
-            'Ruecklauf',
-            (368, 363, 505, 495),
-            (40, 315),
-            (0, 120),
-            location='Bockholz 2',
-            unit='Celsius',
-            rotation='ROTATE_180'),
-    ]
-
-    command = sys.argv[1]
-    match command:
-        case 'serve':
-            serve(gauges)
-        case 'calibrate':
-            calibrate(gauges)
-        case _:
-            print("Commands: 'serve', 'calibrate' 'once'")
-
-
-if __name__ == '__main__':
-    main()

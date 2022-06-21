@@ -2,5 +2,12 @@
 	"python.linting.pylintEnabled": true,
 	"python.linting.pylintArgs": ["--generated-members=cv2.*"],
 	"python.languageServer": "Pylance",
-	"python.linting.enabled": true
+	"python.linting.enabled": true,
+	"editor.useTabStops": false,
+	"editor.tabSize": 4,
+	"python.testing.pytestArgs": [
+		"."
+	],
+	"python.testing.unittestEnabled": false,
+	"python.testing.pytestEnabled": true
 }

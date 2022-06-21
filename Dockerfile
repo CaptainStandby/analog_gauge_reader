@@ -16,6 +16,6 @@ COPY . .
 
 USER ${USER}
 
-ENTRYPOINT ["python3", "analog_gauge_reader.py"]
+ENTRYPOINT ["python3", "server.py"]
 
 CMD ["serve"]
